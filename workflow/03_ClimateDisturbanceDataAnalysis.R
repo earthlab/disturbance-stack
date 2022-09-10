@@ -32,7 +32,7 @@ library(here) #Relative path best practices
 #library(knitr) #For use with R markdown
 
 #Geographic libraries
-library(terra) #New raster data package
+library(terra) #New raster data package, documentation pdf here: https://cran.r-project.org/web/packages/terra/terra.pdf
 #library(sf) #New vector data package
 #library(tmap) #Thematic mapping
 #library(tmaptools) #Supports Tmap
@@ -51,26 +51,12 @@ yearVarFileNames <- list.files(path = here("data", "climate", "GEE_terraclimate_
                                pattern ="AllVariables*", full.names = TRUE)
 
 #Create SpatRasterDataset of monthly rasters
-monthMeans <- vector(mode = "list", length = 1) #Initialize empty list
-for (file in monthFileNames) {
-  monthData <- rast(file)
-  monthMeans <- append(monthMeans, monthData)
-  
-}
-monthMeans <- monthMeans[-1]
+monthMeans <- sds(monthFileNames) #Can load list of file names directly to spatrasterdataset
 names(monthMeans) <- month.name
-monthmeans <- sds(monthmeans)  #turn list into spatrasterdataset
 
 #Create SpatRasterDataset of yearly variable rasters
-yearVarData <- vector(mode = "list", length = 1) #Initialize empty list
-for (file in yearVarFileNames) {
-  yearDats <- rast(file)
-  yearVarData <- append(yearVarData, yearDats)
-  
-}
-yearVarData <- yearVarData[-1]
+yearVarData <- sds(yearVarFileNames)
 names(yearVarData) <- as.character(seq(1958, 2021))
-yearVarData <- sds(yearVarData) #turn list into spatrasterdataset
 
 #Compare rasters of both types to ensure same geometries
 compareGeom(monthMeans$January, yearVarData$`1958`)
