@@ -308,6 +308,6 @@ print(ptsStats);
 Export.table.toDrive({
   collection: ptsStats,
   folder: foldername,
-  description: 'seec_pull_terra_data',
+  description: 'locations_pull_raw_terra_data',
   fileFormat: 'CSV'
 });
