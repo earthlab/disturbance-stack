@@ -8,12 +8,25 @@
 // The script outputs two image collections: one for monthly averages (one image per variable), and the other for min/max/months (one image per year).
 // The image collections are then output as a series named geotiffs to a folder in the user's google drive.
 
+// DIRECT LINK TO GEE SCRIPT: https://code.earthengine.google.com/?scriptPath=users%2Ftymc5571%2FCompoundDisturbance%3AClimate_DisturbanceStack
+
 //////////// DATA
 
 //Data imports copied from GEE
 var terraclimate = ee.ImageCollection("IDAHO_EPSCOR/TERRACLIMATE"),
     neondomains = ee.FeatureCollection("users/tymc5571/NEON_Domains");
 
+
+
+// Climate Disturbance Stack Analysis: Step 1, data wrangling
+// Tyler McIntosh, CU Boulder Earth Lab, 9/9/2022
+
+// This script takes in the TerraClimate dataset, as well as a domain of interest to which results will be clipped to.
+// Datasets are wrangled in such a way as to enable future analysis as outlined by
+// Hammond et al. 2022, which requires monthly averages for each variable of interest over the entire timeframe
+// as well as the minimum/maximum of each variable in a given year, at a given location, in addition to the month in which that max/min occurred.
+// The script outputs two image collections: one for monthly averages (one image per variable), and the other for min/max/months (one image per year).
+// The image collections are then output as a series named geotiffs to a folder in the user's google drive.
 
 
 //////////// SETUP
@@ -34,6 +47,7 @@ print('All TerraClimate', terraclimate);
 // Positive variable: tmmx, vpd, def
 // Negative variables: soil, pr, pdsi
 var vars = terraclimate.select('tmmx', 'vpd', 'def', 'soil', 'pr', 'pdsi');
+print('TerraClimate vars of interest', vars);
 
 
 ////////////// AVERAGES OVER TIME
@@ -183,3 +197,117 @@ batch.Download.ImageCollection.toDrive(allvariables, foldername,
   scale: 4638.3
   });
 
+
+///////////// PULL ALL VALUES FOR A TEST POINT TO CALCULATE ANOMALY BY HAND & COMPARE TO OUTPUT CALCULATION FROM R
+
+//// Functions from GEE developers page: https://developers.google.com/earth-engine/tutorials/community/extract-raster-values-for-points
+//Function to buffer points
+function bufferPoints(radius, bounds) {
+  return function(pt) {
+    pt = ee.Feature(pt);
+    return bounds ? pt.buffer(radius).bounds() : pt.buffer(radius);
+  };
+}
+//Calculate zonal statistics. This function requires an imagecollection!
+function zonalStats(ic, fc, params) {
+  // Initialize internal params dictionary.
+  var _params = {
+    reducer: ee.Reducer.mean(),
+    scale: null,
+    crs: null,
+    bands: null,
+    bandsRename: null,
+    imgProps: null,
+    imgPropsRename: null,
+    datetimeName: 'datetime',
+    datetimeFormat: 'YYYY-MM-dd HH:mm:ss'
+  };
+
+  // Replace initialized params with provided params.
+  if (params) {
+    for (var param in params) {
+      _params[param] = params[param] || _params[param];
+    }
+  }
+
+  // Set default parameters based on an image representative.
+  var imgRep = ic.first();
+  var nonSystemImgProps = ee.Feature(null)
+    .copyProperties(imgRep).propertyNames();
+  if (!_params.bands) _params.bands = imgRep.bandNames();
+  if (!_params.bandsRename) _params.bandsRename = _params.bands;
+  if (!_params.imgProps) _params.imgProps = nonSystemImgProps;
+  if (!_params.imgPropsRename) _params.imgPropsRename = _params.imgProps;
+
+  // Map the reduceRegions function over the image collection.
+  var results = ic.map(function(img) {
+    // Select bands (optionally rename), set a datetime & timestamp property.
+    img = ee.Image(img.select(_params.bands, _params.bandsRename))
+      .set(_params.datetimeName, img.date().format(_params.datetimeFormat))
+      .set('timestamp', img.get('system:time_start'));
+
+    // Define final image property dictionary to set in output features.
+    var propsFrom = ee.List(_params.imgProps)
+      .cat(ee.List([_params.datetimeName, 'timestamp']));
+    var propsTo = ee.List(_params.imgPropsRename)
+      .cat(ee.List([_params.datetimeName, 'timestamp']));
+    var imgProps = img.toDictionary(propsFrom).rename(propsFrom, propsTo);
+
+    // Subset points that intersect the given image.
+    var fcSub = fc.filterBounds(img.geometry());
+
+    // Reduce the image by regions.
+    return img.reduceRegions({
+      collection: fcSub,
+      reducer: _params.reducer,
+      scale: _params.scale,
+      crs: _params.crs
+    })
+    // Add metadata to each feature.
+    .map(function(f) {
+      return f.set(imgProps);
+    });
+  }).flatten().filter(ee.Filter.notNull(_params.bandsRename));
+
+  return results;
+}
+
+//Create feature collection from points
+var pts = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point([-105.24249040058604,40.00981039217258]), {plot_id: "BoulderCO"}), //Boulder, CO, SEEC
+  ee.Feature(ee.Geometry.Point([-110.786763, 43.432451]), {plot_id: "JacksonWY"}), //Jackson WY, Rafter J
+  ee.Feature(ee.Geometry.Point([-122.486757, 48.733972]), {plot_id: "BellinghamWA"}), //Bellingham, WA, WWU
+  ee.Feature(ee.Geometry.Point([-122.170020, 37.428193]), {plot_id: "StanfordCA"}), //Stanford, CA
+]);
+
+
+//Buffer points by 15m radius to create areas for zonal stats
+var buffPts = pts.map(bufferPoints(15, true));
+print("Points:", buffPts);
+
+//Display dataset to ensure correct
+Map.addLayer(vars.filter(ee.Filter.calendarRange(1,1,'month'))
+  .filter(ee.Filter.calendarRange(1958,1958,'year'))
+  .select('tmmx'), {min: -100, max: 500, palette:['blue', 'red']}, 'temp', false);
+Map.addLayer(buffPts);
+
+
+//Set params for zonalStats
+var params = {
+  scale: 30,
+  bands: ['tmmx', 'vpd', 'def', 'soil', 'pr', 'pdsi'],
+  datetimeName: 'month',
+  datetimeFormat: 'YYYYMM'
+};
+
+//Run zonalStats function
+var ptsStats = zonalStats(vars, buffPts, params);
+print(ptsStats);
+
+//Export results
+Export.table.toDrive({
+  collection: ptsStats,
+  folder: foldername,
+  description: 'seec_pull_terra_data',
+  fileFormat: 'CSV'
+});
